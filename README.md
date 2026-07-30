@@ -1,5 +1,7 @@
 # tradingview-screener
 
+[![Gem Version](https://img.shields.io/gem/v/tradingview-screener.svg)](https://rubygems.org/gems/tradingview-screener)
+
 ActiveRecord-style Ruby client for TradingView's scanner API.
 
 Inspired by [shner-elmo/TradingView-Screener](https://github.com/shner-elmo/TradingView-Screener), but designed like Rails ORM relations — not a Python port.
