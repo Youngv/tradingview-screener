@@ -172,7 +172,7 @@ gem contents --show-install-dir tradingview-screener # after installing the buil
 gem push tradingview-screener-0.2.0.gem
 ```
 
-RubyGems MFA is required for releases. If this project is moved to a public source repository, add `source_code_uri`, `changelog_uri`, and `bug_tracker_uri` to the gemspec using the real repository URL.
+RubyGems MFA is required for releases. Source code and issue tracking are available on [GitHub](https://github.com/Youngv/tradingview-screener).
 
 ## License
 

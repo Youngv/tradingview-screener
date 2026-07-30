@@ -1,13 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Changed
-- Added a tracked Ruby version for reproducible development with RVM.
-- Replaced invalid package URLs and placeholder contact details with publishable gem metadata.
-- Added strict gem validation and a Ruby 3.1-3.4 CI test matrix.
-- Clarified Ruby support, unofficial API status, and the release workflow.
-
 ## 0.2.0
 
 ### Changed
@@ -15,6 +7,9 @@
 - Extracted into a standalone publishable gem.
 - Removed implicit ActiveSupport dependency (`presence` / `blank?`).
 - Pure Ruby runtime: only stdlib + optional `socksify` for SOCKS proxies.
+- Added a tracked Ruby version for reproducible development with RVM.
+- Added strict gem validation and a Ruby 3.1-3.4 CI test matrix.
+- Clarified Ruby support, unofficial API status, and the release workflow.
 
 ### Added
 - ActiveRecord-style `Relation` / `Base` / scopes API.

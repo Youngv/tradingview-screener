@@ -19,6 +19,9 @@ Gem::Specification.new do |spec|
 
   spec.metadata = {
     "homepage_uri" => spec.homepage,
+    "source_code_uri" => "https://github.com/Youngv/tradingview-screener",
+    "changelog_uri" => "https://github.com/Youngv/tradingview-screener/blob/main/CHANGELOG.md",
+    "bug_tracker_uri" => "https://github.com/Youngv/tradingview-screener/issues",
     "documentation_uri" => "https://www.rubydoc.info/gems/tradingview-screener",
     "allowed_push_host" => "https://rubygems.org",
     "rubygems_mfa_required" => "true"
