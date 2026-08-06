@@ -60,6 +60,42 @@ RSpec.describe TradingviewScreener::Relation do
       expect(rel.first["close"]).to eq(120.0)
     end
 
+    it "rejects scanner responses without totalCount" do
+      stub_request(:post, %r{scanner\.tradingview\.com/america/scan})
+        .to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { data: [] }.to_json
+        )
+
+      expect { TradingviewScreener::Stock.limit(1).load }
+        .to raise_error(TradingviewScreener::Error, /totalCount/)
+    end
+
+    it "rejects scanner responses with an invalid totalCount" do
+      stub_request(:post, %r{scanner\.tradingview\.com/america/scan})
+        .to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { totalCount: "unknown", data: [] }.to_json
+        )
+
+      expect { TradingviewScreener::Stock.limit(1).load }
+        .to raise_error(TradingviewScreener::Error, /totalCount/)
+    end
+
+    it "rejects scanner responses with a negative totalCount" do
+      stub_request(:post, %r{scanner\.tradingview\.com/america/scan})
+        .to_return(
+          status: 200,
+          headers: { "Content-Type" => "application/json" },
+          body: { totalCount: -1, data: [] }.to_json
+        )
+
+      expect { TradingviewScreener::Stock.limit(1).load }
+        .to raise_error(TradingviewScreener::Error, /totalCount/)
+    end
+
     it "exposes momentum scopes with long/short direction" do
       long = TradingviewScreener::Stock.momentum_trend_long
       short = TradingviewScreener::Stock.momentum_trend_short

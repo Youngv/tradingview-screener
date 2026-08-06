@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+### Fixed
+- `Relation#load` now rejects scanner responses whose `totalCount` is missing, negative, or not an integer instead of coercing invalid values to zero.
+
 ## 0.2.0
 
 ### Changed

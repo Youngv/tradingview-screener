@@ -235,7 +235,7 @@ module TradingviewScreener
           proxy: proxy
         )
         @raw = raw
-        @total_count = raw["totalCount"].to_i
+        @total_count = parse_total_count(raw)
         @records = map_rows(raw)
       end
       @loaded = true
@@ -439,6 +439,13 @@ module TradingviewScreener
     end
 
     private
+
+    def parse_total_count(raw)
+      value = raw["totalCount"] if raw.is_a?(Hash)
+      return value if value.is_a?(Integer) && value >= 0
+
+      raise Error, "scanner response totalCount must be a non-negative integer"
+    end
 
     def default_values(klass)
       {
