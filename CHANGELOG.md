@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Saved screener conversion now maps TradingView camelCase comparison operations to canonical scanner tokens, including `belowOrEqual` to `eless` and `aboveOrEqual` to `egreater`.
+- Saved screener `Exchange` fields now map to the scanner's canonical `exchange` field.
+- Unknown saved screener operations now raise a conversion error instead of silently changing their meaning to equality.
+
 ## 0.2.1
 
 ### Fixed

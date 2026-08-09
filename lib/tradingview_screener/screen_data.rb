@@ -28,6 +28,7 @@ module TradingviewScreener
 
     class ParseError < Error; end
     class FetchError < Error; end
+    class ConversionError < Error; end
 
     class Parser
       SCREEN_DATA_RE = /window\.initData\.screen_data\s*=\s*(\{.*?\})\s*;\s*\n\s*window\.initData\.onScreenerStandalonePage/m
@@ -74,6 +75,7 @@ module TradingviewScreener
     class Converter
       COLUMN_MAP = {
         "Price" => "close",
+        "Exchange" => "exchange",
         "Change" => "change",
         "Volume" => "volume",
         "MarketCap" => "market_cap_basic",
@@ -117,6 +119,56 @@ module TradingviewScreener
         dividends_yield_current sector.tr market sector AnalystRating AnalystRating.tr
         premarket_change premarket_volume
       ].freeze
+
+      OPERATION_MAP = {
+        "above" => "greater",
+        "greater" => "greater",
+        "below" => "less",
+        "less" => "less",
+        "aboveOrEqual" => "egreater",
+        "above_or_equal" => "egreater",
+        "egreater" => "egreater",
+        "belowOrEqual" => "eless",
+        "below_or_equal" => "eless",
+        "eless" => "eless",
+        "equal" => "equal",
+        "eq" => "equal",
+        "notEqual" => "nequal",
+        "not_equal" => "nequal",
+        "nequal" => "nequal",
+        "between" => "in_range",
+        "inRange" => "in_range",
+        "in_range" => "in_range",
+        "notBetween" => "not_in_range",
+        "not_between" => "not_in_range",
+        "notInRange" => "not_in_range",
+        "not_in_range" => "not_in_range",
+        "empty" => "empty",
+        "notEmpty" => "nempty",
+        "nempty" => "nempty",
+        "crosses" => "crosses",
+        "crossesAbove" => "crosses_above",
+        "crosses_above" => "crosses_above",
+        "crossesBelow" => "crosses_below",
+        "crosses_below" => "crosses_below",
+        "match" => "match",
+        "notMatch" => "nmatch",
+        "nmatch" => "nmatch",
+        "smatch" => "smatch",
+        "has" => "has",
+        "hasNoneOf" => "has_none_of",
+        "has_none_of" => "has_none_of",
+        "above%" => "above%",
+        "below%" => "below%",
+        "in_range%" => "in_range%",
+        "not_in_range%" => "not_in_range%",
+        "inDayRange" => "in_day_range",
+        "in_day_range" => "in_day_range",
+        "inWeekRange" => "in_week_range",
+        "in_week_range" => "in_week_range",
+        "inMonthRange" => "in_month_range",
+        "in_month_range" => "in_month_range"
+      }.freeze
 
       def initialize(screen_data)
         @data = deep_stringify(screen_data)
@@ -215,6 +267,7 @@ module TradingviewScreener
         return nil if left.nil? || left == ""
 
         operation = filter.dig("operation", "type").to_s
+        scanner_operation = operation_name(operation)
         right = filter["right"]
         target = filter["target"].to_s
 
@@ -224,18 +277,24 @@ module TradingviewScreener
 
           return {
             "left" => left,
-            "operation" => operation_name(operation, equal_ok: true),
+            "operation" => scanner_operation,
             "right" => right_col
           }
         end
 
-        if right.is_a?(Hash) && (right.key?("left") || right.key?("right")) && operation == "between"
+        if right.is_a?(Hash) && (right.key?("left") || right.key?("right")) && range_operation?(scanner_operation)
           low = right["left"]
           high = right["right"]
           return nil if low.nil? && high.nil?
 
-          if !low.nil? && !high.nil?
-            return { "left" => left, "operation" => "in_range", "right" => [low, high] }
+          if scanner_operation == "not_in_range"
+            if low.nil? || high.nil?
+              raise ConversionError, "operation #{operation.inspect} requires both range bounds"
+            end
+
+            return { "left" => left, "operation" => scanner_operation, "right" => [low, high] }
+          elsif !low.nil? && !high.nil?
+            return { "left" => left, "operation" => scanner_operation, "right" => [low, high] }
           elsif !low.nil?
             return { "left" => left, "operation" => "egreater", "right" => low }
           else
@@ -248,7 +307,7 @@ module TradingviewScreener
 
         {
           "left" => left,
-          "operation" => operation_name(operation, equal_ok: true),
+          "operation" => scanner_operation,
           "right" => value
         }
       end
@@ -267,18 +326,15 @@ module TradingviewScreener
         }
       end
 
-      def operation_name(type, equal_ok: false)
-        case type.to_s
-        when "above", "greater" then "greater"
-        when "below", "less" then "less"
-        when "above_or_equal", "egreater" then "egreater"
-        when "below_or_equal", "eless" then "eless"
-        when "equal", "eq" then "equal"
-        when "not_equal", "nequal" then "nequal"
-        when "between" then "in_range"
-        else
-          equal_ok ? "equal" : type.to_s
+      def operation_name(type)
+        source_operation = type.to_s
+        OPERATION_MAP.fetch(source_operation) do
+          raise ConversionError, "unsupported screen_data operation: #{source_operation.inspect}"
         end
+      end
+
+      def range_operation?(operation)
+        operation == "in_range" || operation == "not_in_range"
       end
 
       def map_column_ref(column)
