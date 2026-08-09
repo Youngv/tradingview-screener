@@ -2,7 +2,10 @@
 
 require "json"
 require "net/http"
+require "set"
 require "uri"
+
+require_relative "generated_column_map"
 
 module TradingviewScreener
   # Convert TradingView saved-screener `window.initData.screen_data`
@@ -10,12 +13,19 @@ module TradingviewScreener
   module ScreenData
     module_function
 
-    def to_payload(screen_data)
-      Converter.new(screen_data).to_payload
+    def to_payload(screen_data, field_contract: nil)
+      Converter.new(screen_data, field_contract: field_contract).to_payload
     end
 
-    def to_relation(screen_data, model: Stock)
-      model.from_payload(to_payload(screen_data))
+    def to_validated_payload(screen_data, client: nil, cookies: nil, proxy: nil, timeout: 20, headers: nil)
+      converter = Converter.new(screen_data)
+      http = client || Client.new(timeout: timeout, cookies: cookies, proxy: proxy, headers: headers)
+      contract = FieldContract.fetch(markets: converter.markets, client: http)
+      Converter.new(screen_data, field_contract: contract).to_payload
+    end
+
+    def to_relation(screen_data, model: Stock, field_contract: nil)
+      model.from_payload(to_payload(screen_data, field_contract: field_contract))
     end
 
     def parse_html(html)
@@ -23,11 +33,18 @@ module TradingviewScreener
     end
 
     def fetch(url, cookies: nil, proxy: nil, timeout: 20, headers: nil)
-      Fetcher.new(cookies: cookies, proxy: proxy, timeout: timeout, headers: headers).fetch(url)
+      Fetcher.new(
+        cookies: cookies,
+        proxy: proxy,
+        timeout: timeout,
+        headers: headers
+      ).fetch(url)
     end
 
     class ParseError < Error; end
     class FetchError < Error; end
+    class ConversionError < Error; end
+    class FieldContractError < ConversionError; end
 
     class Parser
       SCREEN_DATA_RE = /window\.initData\.screen_data\s*=\s*(\{.*?\})\s*;\s*\n\s*window\.initData\.onScreenerStandalonePage/m
@@ -66,14 +83,63 @@ module TradingviewScreener
         {
           "url" => url,
           "screen_data" => data,
-          "payload" => Converter.new(data).to_payload
+          "payload" => ScreenData.to_validated_payload(data, client: client)
         }
+      end
+    end
+
+    # Field names used in filter and sort expressions are validated against the
+    # scanner's server-side schema. Projection-only aliases such as `ticker-view`
+    # are intentionally excluded because TradingView does not publish them in
+    # /metainfo even though /scan accepts them as columns.
+    class FieldContract
+      METAINFO_URL = "https://scanner.tradingview.com/%<market>s/metainfo"
+      MARKET_RE = /\A[a-z0-9_-]+\z/i
+      PROJECTION_ALIASES = Set.new(%w[ticker-view sector.tr AnalystRating AnalystRating.tr]).freeze
+
+      def self.fetch(markets:, client:)
+        market_fields = Array(markets).map(&:to_s).uniq.to_h do |market|
+          unless market.match?(MARKET_RE)
+            raise FieldContractError, "invalid scanner market for metainfo: #{market.inspect}"
+          end
+
+          body = client.get(format(METAINFO_URL, market: market))
+          [market, parse_fields(body, market)]
+        end
+        new(market_fields)
+      end
+
+      def self.parse_fields(body, market)
+        data = JSON.parse(body)
+        fields = data["fields"]
+        unless fields.is_a?(Array)
+          raise FieldContractError, "invalid #{market} metainfo: fields must be an array"
+        end
+
+        fields.filter_map { |field| field["n"] if field.is_a?(Hash) }.to_set
+      rescue JSON::ParserError => e
+        raise FieldContractError, "invalid #{market} metainfo JSON: #{e.message}"
+      end
+
+      def initialize(market_fields)
+        @market_fields = market_fields.transform_keys(&:to_s).transform_values { |fields| Set.new(fields.map(&:to_s)) }
+      end
+
+      def validate!(field, projection: false)
+        return field if projection && PROJECTION_ALIASES.include?(field.to_s)
+
+        missing_markets = @market_fields.filter_map { |market, fields| market unless fields.include?(field.to_s) }
+        return field if missing_markets.empty?
+
+        raise FieldContractError,
+              "scanner field #{field.inspect} is absent from metainfo for: #{missing_markets.join(', ')}"
       end
     end
 
     class Converter
       COLUMN_MAP = {
         "Price" => "close",
+        "Exchange" => "exchange",
         "Change" => "change",
         "Volume" => "volume",
         "MarketCap" => "market_cap_basic",
@@ -118,17 +184,56 @@ module TradingviewScreener
         premarket_change premarket_volume
       ].freeze
 
-      def initialize(screen_data)
+      OPERATION_MAP = {
+        "above" => "greater",
+        "greater" => "greater",
+        "below" => "less",
+        "less" => "less",
+        "aboveOrEqual" => "egreater",
+        "above_or_equal" => "egreater",
+        "egreater" => "egreater",
+        "belowOrEqual" => "eless",
+        "below_or_equal" => "eless",
+        "eless" => "eless",
+        "equal" => "equal",
+        "eq" => "equal",
+        "notEqual" => "nequal",
+        "not_equal" => "nequal",
+        "nequal" => "nequal",
+        "between" => "in_range",
+        "inRange" => "in_range",
+        "in_range" => "in_range",
+        "outside" => "not_in_range",
+        "notBetween" => "not_in_range",
+        "not_between" => "not_in_range",
+        "notInRange" => "not_in_range",
+        "not_in_range" => "not_in_range",
+        "crosses" => "crosses",
+        "crossesUp" => "crosses_above",
+        "crossesAbove" => "crosses_above",
+        "crosses_above" => "crosses_above",
+        "crossesDown" => "crosses_below",
+        "crossesBelow" => "crosses_below",
+        "crosses_below" => "crosses_below"
+      }.freeze
+
+      def initialize(screen_data, field_contract: nil)
         @data = deep_stringify(screen_data)
+        @field_contract = field_contract
+      end
+
+      def markets
+        values = Array(@data.dig("market_settings", "markets"))
+        values.empty? ? ["america"] : values.map(&:to_s)
       end
 
       def to_payload
-        markets = Array(@data.dig("market_settings", "markets"))
-        markets = ["america"] if markets.empty?
         filters = convert_filters(Array(@data["filters"]))
         if @data.dig("market_settings", "is_primary_listing")
+          validate_field!("is_primary")
           filters << { "left" => "is_primary", "operation" => "equal", "right" => true }
         end
+        %w[type typespecs].each { |field| validate_field!(field) }
 
         {
           "markets" => markets,
@@ -166,11 +271,13 @@ module TradingviewScreener
       ].freeze
 
       def convert_columns(column_set)
-        cols = column_set.filter_map { |item| map_column_ref(item) }
+        cols = column_set.filter_map { |item| map_column_ref(item, validate: true, projection: true) }
         cols = DEFAULT_COLUMNS.dup if cols.empty?
         # Ensure type fields used by filter2 compatibility remain present,
         # and always request the metadata columns consumers expect.
-        (%w[type typespecs] + cols + REQUIRED_METADATA_COLUMNS).uniq
+        result = (%w[type typespecs] + cols + REQUIRED_METADATA_COLUMNS).uniq
+        result.each { |field| validate_field!(field, projection: true) }
+        result
       end
 
       def deep_dup(value)
@@ -185,7 +292,13 @@ module TradingviewScreener
       def convert_sort
         column = @data.dig("sort_column", "id").to_s
         direction = @data["sort_direction"].to_s.downcase == "asc" ? "asc" : "desc"
-        sort_by = SORT_MAP[column] || map_column_id(column, @data.dig("sort_column", "params") || {}) || "market_cap_basic"
+        sort_by =
+          if column.empty?
+            "market_cap_basic"
+          else
+            SORT_MAP[column] || map_column_id(column, @data.dig("sort_column", "params") || {})
+          end
+        validate_field!(sort_by)
         {
           "sortBy" => sort_by,
           "sortOrder" => direction
@@ -211,31 +324,40 @@ module TradingviewScreener
       end
 
       def convert_condition(filter)
-        left = map_column_ref(filter.dig("left", "column"))
+        left = map_column_ref(filter.dig("left", "column"), validate: true)
         return nil if left.nil? || left == ""
 
         operation = filter.dig("operation", "type").to_s
+        scanner_operation = operation_name(operation)
         right = filter["right"]
         target = filter["target"].to_s
 
         if right.is_a?(Hash) && right.key?("column")
-          right_col = map_column_ref(right["column"])
+          right_col = map_column_ref(right["column"], validate: true)
           return nil if right_col.nil? || right_col == ""
 
           return {
             "left" => left,
-            "operation" => operation_name(operation, equal_ok: true),
+            "operation" => scanner_operation,
             "right" => right_col
           }
         end
 
-        if right.is_a?(Hash) && (right.key?("left") || right.key?("right")) && operation == "between"
+        if right.is_a?(Hash) && (right.key?("left") || right.key?("right")) && range_operation?(scanner_operation)
           low = right["left"]
           high = right["right"]
           return nil if low.nil? && high.nil?
 
-          if !low.nil? && !high.nil?
-            return { "left" => left, "operation" => "in_range", "right" => [low, high] }
+          if scanner_operation == "not_in_range"
+            if !low.nil? && !high.nil?
+              return { "left" => left, "operation" => scanner_operation, "right" => [low, high] }
+            elsif low.nil?
+              return { "left" => left, "operation" => "egreater", "right" => high }
+            else
+              return { "left" => left, "operation" => "eless", "right" => low }
+            end
+          elsif !low.nil? && !high.nil?
+            return { "left" => left, "operation" => scanner_operation, "right" => [low, high] }
           elsif !low.nil?
             return { "left" => left, "operation" => "egreater", "right" => low }
           else
@@ -248,7 +370,7 @@ module TradingviewScreener
 
         {
           "left" => left,
-          "operation" => operation_name(operation, equal_ok: true),
+          "operation" => scanner_operation,
           "right" => value
         }
       end
@@ -257,7 +379,7 @@ module TradingviewScreener
         values = filter.dig("right", "values")
         return nil if values.nil? || Array(values).empty?
 
-        left = map_column_ref(filter.dig("left", "column"))
+        left = map_column_ref(filter.dig("left", "column"), validate: true)
         return nil if left.nil? || left == ""
 
         {
@@ -267,24 +389,27 @@ module TradingviewScreener
         }
       end
 
-      def operation_name(type, equal_ok: false)
-        case type.to_s
-        when "above", "greater" then "greater"
-        when "below", "less" then "less"
-        when "above_or_equal", "egreater" then "egreater"
-        when "below_or_equal", "eless" then "eless"
-        when "equal", "eq" then "equal"
-        when "not_equal", "nequal" then "nequal"
-        when "between" then "in_range"
-        else
-          equal_ok ? "equal" : type.to_s
+      def operation_name(type)
+        source_operation = type.to_s
+        OPERATION_MAP.fetch(source_operation) do
+          raise ConversionError, "unsupported screen_data operation: #{source_operation.inspect}"
         end
       end
 
-      def map_column_ref(column)
+      def range_operation?(operation)
+        operation == "in_range" || operation == "not_in_range"
+      end
+
+      def map_column_ref(column, validate: false, projection: false)
         return nil if column.nil? || column == {} || column == ""
 
-        map_column_id(column["id"], column["params"] || {})
+        field = map_column_id(column["id"], column["params"] || {})
+        validate_field!(field, projection: projection) if validate
+        field
+      end
+
+      def validate_field!(field, projection: false)
+        @field_contract&.validate!(field, projection: projection)
       end
 
       def map_column_id(id, params)
@@ -310,22 +435,88 @@ module TradingviewScreener
           case interval
           when "Interval10D" then "average_volume_10d_calc"
           when "Interval30D" then "average_volume_30d_calc"
-          else "average_volume_10d_calc"
+          when "Interval60D" then "average_volume_60d_calc"
+          when "Interval90D" then "average_volume_90d_calc"
+          else
+            raise ConversionError, "unsupported AverageVolume interval: #{interval.inspect}"
           end
+        when "Beta"
+          interval = params["interval"].to_s
+          {
+            "Interval1Y" => "beta_1_year",
+            "Interval3Y" => "beta_3_year",
+            "Interval5Y" => "beta_5_year"
+          }.fetch(interval) do
+            raise ConversionError, "unsupported Beta interval: #{interval.inspect}"
+          end
+        when "EpsDiluted"
+          "earnings_per_share_diluted_#{fiscal_period(params, default: 'ttm')}"
+        when "EpsDilutedGrowth"
+          growth_field("earnings_per_share_diluted", params)
+        when "DividendsYield"
+          period = fiscal_period(params, default: "ttm")
+          period == "ttm" ? "dividends_yield_current" : "dividends_yield_#{period}"
+        when "RevenueGrowth"
+          growth_field("total_revenue", params, cagr: true)
+        when "PriceToEarningsToGrowth"
+          "price_earnings_growth_#{fiscal_period(params, default: 'ttm')}"
+        when "ReturnOnEquity"
+          period = fiscal_period(params, default: "ttm")
+          "return_on_equity_#{period == 'ttm' ? 'fq' : period}"
         when "Performance"
           interval = params["interval"].to_s
           case interval
+          when "Interval15m" then "Perf.15m"
+          when "Interval1H" then "Perf.1h"
+          when "Interval4H" then "Perf.4h"
+          when "Interval12H" then "Perf.12h"
+          when "Interval24H" then "Perf.24h"
+          when "Interval1D" then "Perf.D"
           when "Interval1W" then "Perf.W"
+          when "Interval10D" then "Perf.10d"
+          when "Interval30D" then "Perf.30d"
+          when "Interval60D" then "Perf.60d"
+          when "Interval90D" then "Perf.90d"
           when "Interval1M" then "Perf.1M"
           when "Interval3M" then "Perf.3M"
           when "Interval6M" then "Perf.6M"
+          when "Interval52Weeks" then "Perf.Weeks52"
           when "IntervalYTD" then "Perf.YTD"
           when "Interval1Y" then "Perf.Y"
-          else "Perf.W"
+          when "Interval3Y" then "Perf.Y3"
+          when "Interval5Y" then "Perf.5Y"
+          when "Interval10Y" then "Perf.10Y"
+          when "IntervalAll" then "Perf.All"
+          else
+            raise ConversionError, "unsupported Performance interval: #{interval.inspect}"
           end
         else
-          COLUMN_MAP[id] || id
+          COLUMN_MAP[id] || GENERATED_COLUMN_BASE_MAP.fetch(id) do
+            raise ConversionError, "unsupported screen_data column id: #{id.inspect}"
+          end
         end
+      end
+
+      def fiscal_period(params, default: nil)
+        value = params["fiscalPeriod"].to_s
+        value = default.to_s if value.empty? && default
+        return value if %w[fy fq ttm fh current ntm].include?(value)
+
+        raise ConversionError, "unsupported fiscal period: #{value.inspect}"
+      end
+
+      def growth_field(base, params, cagr: false)
+        period = params["period"].to_s
+        suffix = {
+          "YoYTTM" => "yoy_growth_ttm",
+          "YoYAnnual" => "yoy_growth_fy",
+          "YoYQuaterly" => "yoy_growth_fq",
+          "QoQQuaterly" => "qoq_growth_fq"
+        }[period]
+        suffix = "cagr_5y" if cagr && period == "FiveYCAGR"
+        return "#{base}_#{suffix}" if suffix
+
+        raise ConversionError, "unsupported growth period: #{period.inspect}"
       end
 
       def deep_stringify(value)

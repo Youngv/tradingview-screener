@@ -134,12 +134,17 @@ module TradingviewScreener
         Relation.from_payload(self, payload)
       end
 
-      def from_screen_data(screen_data)
-        from_payload(ScreenData.to_payload(screen_data))
+      def from_screen_data(screen_data, field_contract: nil)
+        from_payload(ScreenData.to_payload(screen_data, field_contract: field_contract))
       end
 
       def from_screener_url(url, cookies: nil, proxy: nil, timeout: 20)
-        fetched = ScreenData.fetch(url, cookies: cookies, proxy: proxy, timeout: timeout)
+        fetched = ScreenData.fetch(
+          url,
+          cookies: cookies,
+          proxy: proxy,
+          timeout: timeout
+        )
         from_payload(fetched["payload"])
       end
 
