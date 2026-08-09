@@ -7,6 +7,7 @@
 - Saved screener `Exchange` fields now map to the scanner's canonical `exchange` field.
 - Unknown saved screener operations now raise a conversion error instead of silently changing their meaning to equality.
 - Saved screener URL conversion now validates filter and sort fields against the scanner's HTTP `/metainfo` contract without requiring a browser.
+- Added a checked-in, development-generated base map for hundreds of TradingView UI column IDs, with explicit rules for parameterized financial and interval fields.
 
 ## 0.2.1
 

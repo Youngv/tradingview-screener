@@ -153,6 +153,10 @@ fields fail fast. Projection-only scanner aliases are not validated because Trad
 The production request path never downloads or executes TradingView JavaScript bundles. Bundle inspection
 may be used as a development-time drift signal, but explicit reviewed mappings remain the runtime contract.
 
+The checked-in generated base map covers hundreds of current TradingView UI column IDs. Refresh candidates
+during development with `ruby script/update_screen_data_column_map`, review the diff, and run the metainfo
+contract tests before committing it. Parameterized fields continue to use hand-written semantic rules.
+
 ### Cookies / proxy
 
 ```ruby

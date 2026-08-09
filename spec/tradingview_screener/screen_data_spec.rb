@@ -7,6 +7,21 @@ RSpec.describe TradingviewScreener::ScreenData do
     JSON.parse(File.read(File.expand_path("../fixtures/screen_data/#{name}.json", __dir__)))
   end
 
+  def scanner_fields(*extra)
+    aliases = TradingviewScreener::ScreenData::FieldContract::PROJECTION_ALIASES
+    fields =
+      TradingviewScreener::ScreenData::Converter::DEFAULT_COLUMNS +
+      TradingviewScreener::ScreenData::Converter::REQUIRED_METADATA_COLUMNS +
+      %w[type typespecs] + extra.flatten
+    fields.map(&:to_s).uniq.reject { |field| aliases.include?(field) }
+  end
+
+  def metainfo_body(*extra)
+    JSON.generate(
+      "fields" => scanner_fields(*extra).map { |name| { "n" => name, "t" => "text" } }
+    )
+  end
+
   let(:screen_data) do
     {
       "id" => "example1",
@@ -199,9 +214,7 @@ RSpec.describe TradingviewScreener::ScreenData do
     metainfo_url = "https://scanner.tradingview.com/america/metainfo"
     request = stub_request(:get, metainfo_url).to_return(
       status: 200,
-      body: JSON.generate(
-        "fields" => %w[close exchange market_cap_basic type typespecs].map { |name| { "n" => name, "t" => "text" } }
-      )
+      body: metainfo_body("exchange")
     )
 
     payload = described_class.to_validated_payload(fixture("hg_universe_wide"))
@@ -225,9 +238,7 @@ RSpec.describe TradingviewScreener::ScreenData do
     page_request = stub_request(:get, screener_url).to_return(status: 200, body: html)
     metainfo_request = stub_request(:get, "https://scanner.tradingview.com/america/metainfo").to_return(
       status: 200,
-      body: JSON.generate(
-        "fields" => %w[close exchange market_cap_basic type typespecs].map { |name| { "n" => name, "t" => "text" } }
-      )
+      body: metainfo_body("exchange")
     )
 
     fetched = described_class.fetch(screener_url)
@@ -259,6 +270,32 @@ RSpec.describe TradingviewScreener::ScreenData do
         TradingviewScreener::ScreenData::ConversionError,
         'unsupported screen_data column id: "LegacyPrice"'
       )
+  end
+
+  it "uses the generated bundle map for simple scanner fields" do
+    data = fixture("hg_universe_wide")
+    condition = data.fetch("filters").first
+    condition.fetch("left").fetch("column")["id"] = "Gap"
+    contract = described_class::FieldContract.new(
+      "america" => scanner_fields("gap", "exchange")
+    )
+
+    converted = described_class.to_payload(data, field_contract: contract).fetch("filter").first
+
+    expect(converted).to eq("left" => "gap", "operation" => "eless", "right" => 600)
+    expect(described_class::GENERATED_COLUMN_BASE_MAP.size).to be >= 400
+  end
+
+  it "maps parameterized financial and interval fields explicitly" do
+    converter = described_class::Converter.new({})
+
+    expect(converter.send(:map_column_id, "Beta", "interval" => "Interval5Y")).to eq("beta_5_year")
+    expect(converter.send(:map_column_id, "ReturnOnEquity", "fiscalPeriod" => "ttm"))
+      .to eq("return_on_equity_fq")
+    expect(converter.send(:map_column_id, "EpsDilutedGrowth", "period" => "YoYAnnual"))
+      .to eq("earnings_per_share_diluted_yoy_growth_fy")
+    expect(converter.send(:map_column_id, "RevenueGrowth", "period" => "FiveYCAGR"))
+      .to eq("total_revenue_cagr_5y")
   end
 
   it "rejects malformed metainfo instead of skipping field validation" do
