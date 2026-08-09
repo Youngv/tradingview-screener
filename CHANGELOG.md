@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2
 
 ### Fixed
 - Saved screener conversion now maps TradingView camelCase comparison operations to canonical scanner tokens, including `belowOrEqual` to `eless` and `aboveOrEqual` to `egreater`.
