@@ -6,6 +6,7 @@
 - Saved screener conversion now maps TradingView camelCase comparison operations to canonical scanner tokens, including `belowOrEqual` to `eless` and `aboveOrEqual` to `egreater`.
 - Saved screener `Exchange` fields now map to the scanner's canonical `exchange` field.
 - Unknown saved screener operations now raise a conversion error instead of silently changing their meaning to equality.
+- Saved screener URL conversion now validates filter and sort fields against the scanner's HTTP `/metainfo` contract without requiring a browser.
 
 ## 0.2.1
 

@@ -147,14 +147,11 @@ RSpec.describe TradingviewScreener::ScreenData do
     expected_operations = {
       "aboveOrEqual" => "egreater",
       "belowOrEqual" => "eless",
-      "notEqual" => "nequal",
+      "nequal" => "nequal",
       "inRange" => "in_range",
-      "notBetween" => "not_in_range",
-      "crossesAbove" => "crosses_above",
-      "crossesBelow" => "crosses_below",
-      "notMatch" => "nmatch",
-      "notEmpty" => "nempty",
-      "hasNoneOf" => "has_none_of"
+      "outside" => "not_in_range",
+      "crossesUp" => "crosses_above",
+      "crossesDown" => "crosses_below"
     }
 
     expected_operations.each do |source_operation, scanner_operation|
@@ -162,7 +159,7 @@ RSpec.describe TradingviewScreener::ScreenData do
       condition = data.fetch("filters").first
       condition["operation"]["type"] = source_operation
       condition["right"] =
-        if %w[inRange notBetween].include?(source_operation)
+        if %w[inRange outside].include?(source_operation)
           { "left" => 10, "right" => 600 }
         else
           { "value" => 600 }
@@ -173,6 +170,20 @@ RSpec.describe TradingviewScreener::ScreenData do
     end
   end
 
+  it "preserves TradingView's inclusive one-sided outside range semantics" do
+    data = fixture("hg_universe_wide")
+    condition = data.fetch("filters").first
+    condition.fetch("operation")["type"] = "outside"
+
+    condition["right"] = { "left" => nil, "right" => 600 }
+    expect(described_class.to_payload(data).fetch("filter").first)
+      .to eq("left" => "close", "operation" => "egreater", "right" => 600)
+
+    condition["right"] = { "left" => 10, "right" => nil }
+    expect(described_class.to_payload(data).fetch("filter").first)
+      .to eq("left" => "close", "operation" => "eless", "right" => 10)
+  end
+
   it "fails fast for unknown saved-screener operations" do
     data = fixture("hg_universe_wide")
     data.fetch("filters").first.fetch("operation")["type"] = "approximately"
@@ -181,6 +192,85 @@ RSpec.describe TradingviewScreener::ScreenData do
       .to raise_error(
         TradingviewScreener::ScreenData::ConversionError,
         'unsupported screen_data operation: "approximately"'
+      )
+  end
+
+  it "validates filter and sort fields against scanner metainfo over HTTP" do
+    metainfo_url = "https://scanner.tradingview.com/america/metainfo"
+    request = stub_request(:get, metainfo_url).to_return(
+      status: 200,
+      body: JSON.generate(
+        "fields" => %w[close exchange market_cap_basic type typespecs].map { |name| { "n" => name, "t" => "text" } }
+      )
+    )
+
+    payload = described_class.to_validated_payload(fixture("hg_universe_wide"))
+
+    expect(payload["filter"]).to eq([
+      { "left" => "close", "operation" => "eless", "right" => 600 },
+      { "left" => "exchange", "operation" => "in_range", "right" => %w[NASDAQ NYSE AMEX] }
+    ])
+    expect(request).to have_been_requested.once
+  end
+
+  it "always validates saved screener URL conversions through the HTTP metainfo contract" do
+    screener_url = "https://www.tradingview.com/screener/hg-universe-wide/"
+    data = fixture("hg_universe_wide")
+    html = <<~HTML
+      <script>
+        window.initData.screen_data = #{JSON.generate(data)};
+        window.initData.onScreenerStandalonePage = true;
+      </script>
+    HTML
+    page_request = stub_request(:get, screener_url).to_return(status: 200, body: html)
+    metainfo_request = stub_request(:get, "https://scanner.tradingview.com/america/metainfo").to_return(
+      status: 200,
+      body: JSON.generate(
+        "fields" => %w[close exchange market_cap_basic type typespecs].map { |name| { "n" => name, "t" => "text" } }
+      )
+    )
+
+    fetched = described_class.fetch(screener_url)
+
+    expect(fetched.fetch("payload").fetch("filter").first)
+      .to eq("left" => "close", "operation" => "eless", "right" => 600)
+    expect(page_request).to have_been_requested.once
+    expect(metainfo_request).to have_been_requested.once
+  end
+
+  it "fails fast when a mapped query field is absent from scanner metainfo" do
+    contract = described_class::FieldContract.new(
+      "america" => %w[close market_cap_basic type typespecs]
+    )
+
+    expect { described_class.to_payload(fixture("hg_universe_wide"), field_contract: contract) }
+      .to raise_error(
+        TradingviewScreener::ScreenData::FieldContractError,
+        'scanner field "exchange" is absent from metainfo for: america'
+      )
+  end
+
+  it "fails fast for unknown saved-screener column ids instead of passing them through" do
+    data = fixture("hg_universe_wide")
+    data.fetch("filters").first.fetch("left").fetch("column")["id"] = "LegacyPrice"
+
+    expect { described_class.to_payload(data) }
+      .to raise_error(
+        TradingviewScreener::ScreenData::ConversionError,
+        'unsupported screen_data column id: "LegacyPrice"'
+      )
+  end
+
+  it "rejects malformed metainfo instead of skipping field validation" do
+    stub_request(:get, "https://scanner.tradingview.com/america/metainfo").to_return(
+      status: 200,
+      body: JSON.generate("fields" => nil)
+    )
+
+    expect { described_class.to_validated_payload(fixture("hg_universe_wide")) }
+      .to raise_error(
+        TradingviewScreener::ScreenData::FieldContractError,
+        "invalid america metainfo: fields must be an array"
       )
   end
 

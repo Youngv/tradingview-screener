@@ -134,6 +134,25 @@ rel = TradingviewScreener::Stock.from_screener_url(
 rel.to_a
 ```
 
+`from_screener_url` uses server-side HTTP only: it reads `screen_data` from the saved screener HTML,
+fetches each selected market's scanner `/metainfo`, and validates filter/sort fields before building the
+relation. It does not require a browser or browser-captured requests.
+
+If `screen_data` is already available, validate it explicitly with the same HTTP contract:
+
+```ruby
+payload = TradingviewScreener::ScreenData.to_validated_payload(screen_data)
+rel = TradingviewScreener::Stock.from_payload(payload)
+```
+
+Callers processing many screeners may fetch and reuse a `ScreenData::FieldContract`; passing a contract
+to `to_payload` keeps conversion deterministic and avoids repeated HTTP requests. Unknown operations and
+fields fail fast. Projection-only scanner aliases are not validated because TradingView omits them from
+`/metainfo`; filter and sort fields are always validated.
+
+The production request path never downloads or executes TradingView JavaScript bundles. Bundle inspection
+may be used as a development-time drift signal, but explicit reviewed mappings remain the runtime contract.
+
 ### Cookies / proxy
 
 ```ruby
