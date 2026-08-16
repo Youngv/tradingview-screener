@@ -22,6 +22,58 @@ RSpec.describe TradingviewScreener::ScreenData do
     )
   end
 
+  def symbol_type_filter(values)
+    {
+      "left" => { "column" => { "id" => "SymbolType", "params" => {} } },
+      "right" => { "values" => values },
+      "type" => "CheckboxGroup"
+    }
+  end
+
+  def stock_type_filter2(*branches)
+    {
+      "operator" => "and",
+      "operands" => [
+        {
+          "operation" => {
+            "operator" => "or",
+            "operands" => branches
+          }
+        },
+        {
+          "expression" => {
+            "left" => "typespecs",
+            "operation" => "has_none_of",
+            "right" => ["pre-ipo"]
+          }
+        }
+      ]
+    }
+  end
+
+  def stock_branch(typespec)
+    {
+      "operation" => {
+        "operator" => "and",
+        "operands" => [
+          { "expression" => { "left" => "type", "operation" => "equal", "right" => "stock" } },
+          { "expression" => { "left" => "typespecs", "operation" => "has", "right" => [typespec] } }
+        ]
+      }
+    }
+  end
+
+  def dr_branch
+    {
+      "operation" => {
+        "operator" => "and",
+        "operands" => [
+          { "expression" => { "left" => "type", "operation" => "equal", "right" => "dr" } }
+        ]
+      }
+    }
+  end
+
   let(:screen_data) do
     {
       "id" => "example1",
@@ -156,6 +208,111 @@ RSpec.describe TradingviewScreener::ScreenData do
     ])
     expect(payload["columns"]).to include("exchange")
     expect(payload["filter"]).not_to include(hash_including("left" => "Exchange"))
+  end
+
+  it "converts the production CommonStock selection into canonical filter2 while preserving USD" do
+    payload = described_class.to_payload(fixture("hg_universe_common_stock"))
+
+    expect(payload["filter"]).to eq([
+      { "left" => "close", "operation" => "eless", "right" => 600 },
+      { "left" => "exchange", "operation" => "in_range", "right" => %w[NASDAQ NYSE AMEX] },
+      { "left" => "currency_id", "operation" => "in_range", "right" => ["USD"] },
+      { "left" => "is_primary", "operation" => "equal", "right" => true }
+    ])
+    expect(payload["filter"]).not_to include(hash_including("left" => "type"))
+    expect(payload["filter2"]).to eq(stock_type_filter2(stock_branch("common")))
+  end
+
+  it "maps every supported SymbolType value into deterministic canonical branches" do
+    data = fixture("hg_universe_common_stock")
+    symbol_type = data.fetch("filters").find { |filter| filter.dig("left", "column", "id") == "SymbolType" }
+    symbol_type.fetch("right")["values"] = %w[DepositaryReceipt PreferredStock CommonStock]
+
+    payload = described_class.to_payload(data)
+
+    expect(payload["filter2"]).to eq(
+      stock_type_filter2(stock_branch("common"), stock_branch("preferred"), dr_branch)
+    )
+  end
+
+  it "uses the existing default filter2 when SymbolType is inactive" do
+    data = fixture("hg_universe_common_stock")
+    symbol_type = data.fetch("filters").find { |filter| filter.dig("left", "column", "id") == "SymbolType" }
+    symbol_type.fetch("right")["values"] = []
+
+    expect(described_class.to_payload(data)["filter2"])
+      .to eq(TradingviewScreener::Relation::STOCK_TYPE_FILTER2)
+  end
+
+  it "fails fast for unknown SymbolType values" do
+    data = fixture("hg_universe_common_stock")
+    symbol_type = data.fetch("filters").find { |filter| filter.dig("left", "column", "id") == "SymbolType" }
+    symbol_type.fetch("right")["values"] = ["CommonStock", "CryptoToken"]
+
+    expect { described_class.to_payload(data) }
+      .to raise_error(
+        TradingviewScreener::ScreenData::ConversionError,
+        'unsupported screen_data SymbolType values: "CryptoToken"'
+      )
+  end
+
+  it "fails fast for blank SymbolType values" do
+    data = fixture("hg_universe_common_stock")
+    symbol_type = data.fetch("filters").find { |filter| filter.dig("left", "column", "id") == "SymbolType" }
+    symbol_type.fetch("right")["values"] = [""]
+
+    expect { described_class.to_payload(data) }
+      .to raise_error(
+        TradingviewScreener::ScreenData::ConversionError,
+        'unsupported screen_data SymbolType values: ""'
+      )
+  end
+
+  it "fails fast for duplicate SymbolType values" do
+    data = fixture("hg_universe_common_stock")
+    symbol_type = data.fetch("filters").find { |filter| filter.dig("left", "column", "id") == "SymbolType" }
+    symbol_type.fetch("right")["values"] = %w[CommonStock CommonStock]
+
+    expect { described_class.to_payload(data) }
+      .to raise_error(
+        TradingviewScreener::ScreenData::ConversionError,
+        "screen_data SymbolType values must be unique"
+      )
+  end
+
+  it "fails fast for malformed active SymbolType values" do
+    data = fixture("hg_universe_common_stock")
+    symbol_type = data.fetch("filters").find { |filter| filter.dig("left", "column", "id") == "SymbolType" }
+    symbol_type.fetch("right")["values"] = "CommonStock"
+
+    expect { described_class.to_payload(data) }
+      .to raise_error(
+        TradingviewScreener::ScreenData::ConversionError,
+        "screen_data SymbolType values must be an array"
+      )
+  end
+
+  it "fails fast when SymbolType is not a CheckboxGroup" do
+    data = fixture("hg_universe_common_stock")
+    symbol_type = data.fetch("filters").find { |filter| filter.dig("left", "column", "id") == "SymbolType" }
+    symbol_type["type"] = "Condition"
+
+    expect { described_class.to_payload(data) }
+      .to raise_error(
+        TradingviewScreener::ScreenData::ConversionError,
+        "screen_data SymbolType filter must be a CheckboxGroup"
+      )
+  end
+
+  it "fails fast for multiple active SymbolType filters" do
+    data = fixture("hg_universe_common_stock")
+    data.fetch("filters") << symbol_type_filter(["DepositaryReceipt"])
+
+    expect { described_class.to_payload(data) }
+      .to raise_error(
+        TradingviewScreener::ScreenData::ConversionError,
+        "screen_data must contain at most one active SymbolType filter"
+      )
   end
 
   it "maps saved-screener camelCase comparison operations to scanner tokens" do

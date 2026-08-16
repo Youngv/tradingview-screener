@@ -145,6 +145,12 @@ payload = TradingviewScreener::ScreenData.to_validated_payload(screen_data)
 rel = TradingviewScreener::Stock.from_payload(payload)
 ```
 
+Saved Stock Screener `SymbolType` checkbox values are structural filters. The converter maps Common stock,
+Preferred stock, and Depositary receipt selections into the scanner's canonical `filter2`; it does not emit
+them as ordinary `type` filters. Multiple selected types become a deterministic OR expression, while unknown,
+blank, duplicate, malformed, or multiply active SymbolType contracts raise `ScreenData::ConversionError`.
+An inactive SymbolType checkbox continues to use the scanner's default stock-type contract.
+
 Callers processing many screeners may fetch and reuse a `ScreenData::FieldContract`; passing a contract
 to `to_payload` keeps conversion deterministic and avoids repeated HTTP requests. Unknown operations and
 fields fail fast. Projection-only scanner aliases are not validated because TradingView omits them from
@@ -185,7 +191,7 @@ puts rel.scanner_url
 ```bash
 bundle install
 bundle exec rspec
-bundle exec rake build   # => pkg/tradingview-screener-0.2.0.gem
+bundle exec rake build   # => pkg/tradingview-screener-0.2.3.gem
 gem build tradingview-screener.gemspec --strict
 ```
 
@@ -194,7 +200,7 @@ Before publishing, verify that the version is not already in use and inspect the
 ```bash
 gem build tradingview-screener.gemspec --strict
 gem contents --show-install-dir tradingview-screener # after installing the built gem
-gem push tradingview-screener-0.2.0.gem
+gem push tradingview-screener-0.2.3.gem
 ```
 
 RubyGems MFA is required for releases. Source code and issue tracking are available on [GitHub](https://github.com/Youngv/tradingview-screener).

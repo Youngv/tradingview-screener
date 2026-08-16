@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.3
+
+### Fixed
+- Saved screener `SymbolType` checkbox selections now produce the scanner's canonical `filter2` branches instead of an invalid ordinary `type in ["CommonStock"]` filter.
+- Common stock, preferred stock, depositary receipt, and deterministic multi-select combinations preserve their exact TradingView semantics.
+- Unknown, blank, duplicate, malformed, or multiply active `SymbolType` contracts now fail explicitly instead of widening or corrupting the scanner query.
+
 ## 0.2.2
 
 ### Fixed
