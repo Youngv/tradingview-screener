@@ -217,6 +217,9 @@ module TradingviewScreener
         "crosses_below" => "crosses_below"
       }.freeze
 
+      SYMBOL_TYPE_COLUMN_ID = "SymbolType"
+      SYMBOL_TYPE_ORDER = %w[CommonStock PreferredStock DepositaryReceipt].freeze
+
       def initialize(screen_data, field_contract: nil)
         @data = deep_stringify(screen_data)
         @field_contract = field_contract
@@ -228,7 +231,9 @@ module TradingviewScreener
       end
 
       def to_payload
-        filters = convert_filters(Array(@data["filters"]))
+        source_filters = Array(@data["filters"])
+        filter2 = convert_symbol_type_filter2(source_filters)
+        filters = convert_filters(source_filters.reject { |filter| symbol_type_filter?(filter) })
         if @data.dig("market_settings", "is_primary_listing")
           validate_field!("is_primary")
           filters << { "left" => "is_primary", "operation" => "equal", "right" => true }
@@ -241,7 +246,7 @@ module TradingviewScreener
           "options" => { "lang" => "en" },
           "columns" => convert_columns(Array(@data["default_custom_column_set"])),
           "filter" => filters,
-          "filter2" => deep_dup(Relation::STOCK_TYPE_FILTER2),
+          "filter2" => filter2,
           "sort" => convert_sort,
           "range" => [0, 100],
           "ignore_unknown_fields" => false,
@@ -307,6 +312,98 @@ module TradingviewScreener
 
       def convert_filters(filters)
         filters.filter_map { |filter| convert_filter(filter) }
+      end
+
+      def convert_symbol_type_filter2(filters)
+        symbol_type_filters = filters.select { |filter| symbol_type_filter?(filter) }
+        symbol_type_filters.each { |filter| validate_symbol_type_filter!(filter) }
+        active_filters = symbol_type_filters.select { |filter| filter.dig("right", "values").any? }
+
+        if active_filters.size > 1
+          raise ConversionError, "screen_data must contain at most one active SymbolType filter"
+        end
+        return deep_dup(Relation::STOCK_TYPE_FILTER2) if active_filters.empty?
+
+        values = active_filters.first.dig("right", "values")
+        unsupported = values.uniq - SYMBOL_TYPE_ORDER
+        unless unsupported.empty?
+          names = unsupported.map(&:inspect).join(", ")
+          raise ConversionError, "unsupported screen_data SymbolType values: #{names}"
+        end
+        if values.uniq.size != values.size
+          raise ConversionError, "screen_data SymbolType values must be unique"
+        end
+
+        selected = SYMBOL_TYPE_ORDER.select { |value| values.include?(value) }
+        {
+          "operator" => "and",
+          "operands" => [
+            {
+              "operation" => {
+                "operator" => "or",
+                "operands" => selected.map { |value| symbol_type_branch(value) }
+              }
+            },
+            pre_ipo_exclusion
+          ]
+        }
+      end
+
+      def symbol_type_filter?(filter)
+        filter.dig("left", "column", "id").to_s == SYMBOL_TYPE_COLUMN_ID
+      end
+
+      def validate_symbol_type_filter!(filter)
+        unless filter["type"].to_s == "CheckboxGroup"
+          raise ConversionError, "screen_data SymbolType filter must be a CheckboxGroup"
+        end
+
+        values = filter.dig("right", "values")
+        return if values.is_a?(Array)
+
+        raise ConversionError, "screen_data SymbolType values must be an array"
+      end
+
+      def symbol_type_branch(value)
+        case value
+        when "CommonStock" then stock_type_branch("common")
+        when "PreferredStock" then stock_type_branch("preferred")
+        when "DepositaryReceipt" then depositary_receipt_branch
+        else raise ConversionError, "unsupported screen_data SymbolType value: #{value.inspect}"
+        end
+      end
+
+      def stock_type_branch(typespec)
+        {
+          "operation" => {
+            "operator" => "and",
+            "operands" => [
+              { "expression" => { "left" => "type", "operation" => "equal", "right" => "stock" } },
+              { "expression" => { "left" => "typespecs", "operation" => "has", "right" => [typespec] } }
+            ]
+          }
+        }
+      end
+
+      def depositary_receipt_branch
+        {
+          "operation" => {
+            "operator" => "and",
+            "operands" => [
+              { "expression" => { "left" => "type", "operation" => "equal", "right" => "dr" } }
+            ]
+          }
+        }
+      end
+
+      def pre_ipo_exclusion
+        {
+          "expression" => {
+            "left" => "typespecs",
+            "operation" => "has_none_of",
+            "right" => ["pre-ipo"]
+          }
+        }
       end
 
       def convert_filter(filter)

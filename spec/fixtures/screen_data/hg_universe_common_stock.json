@@ -1,0 +1,85 @@
+{
+  "id": "hg-universe-wide",
+  "title": "HG Universe Wide",
+  "market_settings": {
+    "markets": ["america"],
+    "is_primary_listing": true
+  },
+  "sort_column": {
+    "id": "MarketCap",
+    "params": {}
+  },
+  "sort_direction": "desc",
+  "filters": [
+    {
+      "left": {
+        "column": {
+          "id": "Price",
+          "params": {}
+        }
+      },
+      "right": {
+        "value": 600
+      },
+      "operation": {
+        "type": "belowOrEqual"
+      },
+      "target": "value",
+      "type": "Condition"
+    },
+    {
+      "left": {
+        "column": {
+          "id": "Exchange",
+          "params": {}
+        }
+      },
+      "right": {
+        "values": ["NASDAQ", "NYSE", "AMEX"]
+      },
+      "type": "CheckboxGroup"
+    },
+    {
+      "left": {
+        "column": {
+          "id": "SymbolType",
+          "params": {}
+        }
+      },
+      "right": {
+        "values": ["CommonStock"]
+      },
+      "type": "CheckboxGroup"
+    },
+    {
+      "left": {
+        "column": {
+          "id": "SymbolCurrency",
+          "params": {}
+        }
+      },
+      "right": {
+        "values": ["USD"]
+      },
+      "type": "CheckboxGroup"
+    }
+  ],
+  "default_custom_column_set": [
+    {
+      "id": "TickerUniversal",
+      "params": {}
+    },
+    {
+      "id": "Price",
+      "params": {}
+    },
+    {
+      "id": "Exchange",
+      "params": {}
+    },
+    {
+      "id": "SymbolCurrency",
+      "params": {}
+    }
+  ]
+}
